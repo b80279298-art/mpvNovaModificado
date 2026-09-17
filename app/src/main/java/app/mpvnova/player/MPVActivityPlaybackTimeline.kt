@@ -1,5 +1,7 @@
 package app.mpvnova.player
 
+import kotlin.math.roundToInt
+
 import android.os.SystemClock
 import android.view.KeyEvent
 
@@ -92,7 +94,45 @@ internal fun MPVActivity.setPlaybackSeekbarProgress(progress: Int) {
     lastSeekbarUiUpdateMs = SystemClock.uptimeMillis()
 }
 
+/**
+ * Updates the seekbar secondary-progress layer from mpv's demuxer cache.
+ *
+ * mpv reports demuxer-cache-duration as the amount of media currently buffered
+ * around the playback point. For the forward-cache visualization we project
+ * that duration from the current playback position onto the seekbar timeline.
+ * The value is clamped to the media duration so it can never extend beyond
+ * the end of a finite file.
+ */
+internal fun MPVActivity.updatePlaybackBuffer(positionMs: Long = psc.position) {
+    if (userIsOperatingSeekbar) return
+
+    val seekbar = binding.playbackSeekbar
+    val max = seekbar.max
+    val durationMs = psc.duration.coerceAtLeast(0L)
+
+    if (max <= 0 || durationMs <= 0L) {
+        if (seekbar.secondaryProgress != 0)
+            seekbar.secondaryProgress = 0
+        return
+    }
+
+    val cacheSeconds = mpvGetPropertyDouble("demuxer-cache-duration")
+        ?.takeIf { it.isFinite() && it > 0.0 }
+        ?: 0.0
+    val currentPositionMs = positionMs.coerceIn(0L, durationMs)
+    val bufferedUntilMs = (currentPositionMs + cacheSeconds * MPV_MILLIS_PER_SECOND_DOUBLE)
+        .coerceIn(currentPositionMs.toDouble(), durationMs.toDouble())
+
+    val secondaryProgress = (bufferedUntilMs / durationMs * max.toDouble())
+        .roundToInt()
+        .coerceIn(0, max)
+
+    if (seekbar.secondaryProgress != secondaryProgress)
+        seekbar.secondaryProgress = secondaryProgress
+}
+
 internal fun MPVActivity.updatePlaybackTimeline(positionMs: Long, forceTextUpdate: Boolean = false) {
+    if (!userIsOperatingSeekbar) updatePlaybackBuffer(positionMs)
     if (!userIsOperatingSeekbar) {
         val progress = seekbarProgressFromMillis(positionMs)
         val now = SystemClock.uptimeMillis()
